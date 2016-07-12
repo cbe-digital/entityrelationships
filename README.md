@@ -1,6 +1,20 @@
-This module generates a graph of the entities, fields and their
-relationship of a particular installation of Drupal 7. This enables a quick
-overview of your Drupal 7 entities and bundles.
+This module generates a graph of the entities, fields and their relationships of
+a particular installation of Drupal 7. This enables a quick overview of your
+Drupal 7 entities and bundles.
+
+This is an altered version (fork) of the original entitiesdiagram module
+(https://github.com/Gizra/entitiesdiagram) that provides some hooks and supports
+rendering using the PlantUML library.
+
+The PlantUML output format groups entity types together and shows entity type /
+entity bundle relations in a psuedo-UML parent-child inheritance style. Since
+Drupal 7 entity bundles have no real OOP class inheritance, this is very
+experimental and only meant to provide a simple overview of bundles and fields.
+The result uses UML items to visualize this, but is not a proper UML diagram.
+
+Color swatches can be manipulated via hook_entityrelationships_entitygraph_color_swatches()
+and the graph itself can be modified via entityrelationships_entitygraph().
+
 
 # Usage Drush
 
@@ -8,20 +22,6 @@ overview of your Drupal 7 entities and bundles.
 
     $ drush entityrelations --include_fields --entity_type=node | dot -Gratio=0.7 -Eminlen=2 -T png -o ./test.png
 
-# Usage UI
+    $ drush entityrelations --include_fields | java -jar /path/to/plantuml.jar -pipe > ./test.png
 
-go to URL `admin/entity-relations/<type>/<display_fields>` to see one entity type or, 
-
-to see all entities  `admin/entity-relations`
-
-### example:
-Display only Nodes with no fields:
-* ```http://mywebsite.com/admin/entity-relations/node/false```
-
-Display all entities:
-* ```http://mywebsite.com/admin/entity-relations```
-
-Generates a graph in the PNG format.
-
-![entity_relations___productivity](https://cloud.githubusercontent.com/assets/165644/12092755/ad4bb60e-b307-11e5-904f-a75ee8db7b5c.png)
-![entity_relations___productivity](https://cloud.githubusercontent.com/assets/165644/12093435/8a52dd54-b30b-11e5-9b43-2f63e5befd66.png)
+    $ drush entityrelations --include_fields | java -jar /path/to/plantuml.jar -pipe -tsvg > ./test.svg

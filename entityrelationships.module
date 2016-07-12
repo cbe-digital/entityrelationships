@@ -1,8 +1,10 @@
 <?php
+
 /**
  * @file
  * Code for the entity relationship graph.
  */
+
 /**
  * Implements hook_menu().
  */
@@ -27,7 +29,7 @@ function entityrelationships_menu_callback($entity_type = FALSE, $include_fields
   drupal_add_css(drupal_get_path('module', 'entityrelationships') . '/entityrelationships.css');
   drupal_add_js('http://mdaines.github.io/viz.js/bower_components/viz.js/viz.js', 'file');
 
-  $data = 'var dataSVG = `' . entityrelationship_entitygraph_generate(entityrelationships_entitygraph(empty($include_fields), $entity_type)) . '`;';
+  $data = 'var dataSVG = `' . entityrelationships_entitygraph_generate(entityrelationships_entitygraph(empty($include_fields), $entity_type)) . '`;';
   drupal_add_js($data, 'inline');
 
   drupal_add_js(drupal_get_path('module', 'entityrelationships') . '/entityrelationships.js', 'file');
@@ -40,7 +42,9 @@ function entityrelationships_menu_callback($entity_type = FALSE, $include_fields
 function entityrelationships_entitygraph($include_fields = FALSE, $single_entity_type = FALSE) {
   $graph = array();
 
-  $entity_refs = entityrelationship_entitygraph_entityreference_connections();
+  $property_refs = entityrelationships_entitygraph_property_connections();
+  $entity_refs = entityrelationships_entitygraph_entityreference_connections();
+
   if ($single_entity_type) {
     $entities = array($single_entity_type => entity_get_info($single_entity_type));
   }
@@ -49,8 +53,8 @@ function entityrelationships_entitygraph($include_fields = FALSE, $single_entity
   }
 
   foreach ($entities as $entity_type => $entity_info) {
-    // Exclude non important entities.
-    if (in_array($entity_type, array('message_type', 'user', 'restful_token_auth',))) {
+    // Exclude non-important entity types.
+    if (in_array($entity_type, variable_get('entityrelationships_excluded_entity_types', array('message_type', 'restful_token_auth')))) {
       continue;
     }
     $node_info = array();
@@ -68,12 +72,11 @@ function entityrelationships_entitygraph($include_fields = FALSE, $single_entity
         }
       }
 
-
       // Generate the bundles.
       $has_bundles = !empty($entity_info['entity keys']['bundle']) && count($entity_info['bundles']) > 0;
       if ($has_bundles) {
         foreach ($entity_info['bundles'] as $bundle_name => $bundle_info) {
-          $graph['nodes']['cluster_entity_group_' . $entity_type]['entity_' . $entity_type . '__bundle_' . str_replace('-', '_', $bundle_name)] = array(
+          $graph['nodes'][$entity_type][str_replace('-', '_', $bundle_name)] = array(
             'title' => $bundle_info['label'],
           );
         }
@@ -81,7 +84,6 @@ function entityrelationships_entitygraph($include_fields = FALSE, $single_entity
 
       // Traverse the instances.
       if ($include_fields) {
-
         $fields = array();
         foreach (field_info_instances($entity_type) as $bundle => $instances) {
           foreach ($instances as $field_name => $instance_info) {
@@ -111,38 +113,50 @@ function entityrelationships_entitygraph($include_fields = FALSE, $single_entity
             // Local column.
             key($foreign_key_info['columns']);
 
-            $foreign_entity_type = entityrelationship_entitygraph_get_entity_by_table($foreign_key_info['table']);
+            $foreign_entity_type = entityrelationships_entitygraph_get_entity_by_table($foreign_key_info['table']);
             if ($foreign_entity_type) {
               $relationships[] = $foreign_entity_type;
             }
           }
 
           foreach ($bundles as $bundle_name) {
-            $graph['nodes']['cluster_entity_group_' . $entity_type]['entity_' . $entity_type . '__bundle_' . $bundle_name]['fields'][$field_name] = $field_property_info;
+            $graph['nodes'][$entity_type][$bundle_name]['fields'][$field_name] = $field_property_info;
           }
         }
       }
     }
 
-    if ($has_bundles) {
-      $group = &$graph['nodes']['cluster_entity_group_' . $entity_type];
+    // User has no bundles, but we add a group anyway for consistency.
+    if ($has_bundles || $entity_type == 'user') {
+      $group = &$graph['nodes'][$entity_type];
       $group['label'] = $entity_info['label'];
       $group['group'] = TRUE;
     }
-
 
     // Entity reference edges.
     if (isset($entity_refs[$entity_type])) {
       foreach ($entity_refs[$entity_type] as $bundle_name => $field_ref_info) {
         foreach ($field_ref_info as $field_name => $target) {
           foreach ($target as $target_type => $target_info) {
-            $relationship = 'entity_' . $target_type . '__bundle_' . $target_info['bundle']; //
-            entityrelationship_entitygraph_relationship($graph, 'entity_' . $entity_type . '__bundle_' . $bundle_name, $relationship, $target_info['required'], $target_info['cardinality']);
+            $relationship = $target_info['bundle']; //
+            entityrelationships_entitygraph_relationship($graph, $bundle_name, $relationship, $target_info['required'], $target_info['cardinality']);
           }
         }
       }
     }
+
+    // Property edges.
+    if (isset($property_refs[$entity_type])) {
+      foreach ($property_refs[$entity_type] as $propety_name => $target) {
+        foreach ($target as $target_type => $target_info) {
+          entityrelationships_entitygraph_relationship($graph, $entity_type, $target_type, $target_info['required'], $target_info['cardinality']);
+        }
+      }
+    }
   }
+
+  // Allow other modules to modify the graph.
+  drupal_alter('entityrelationships_entitygraph', $graph);
 
   return $graph;
 }
@@ -150,7 +164,7 @@ function entityrelationships_entitygraph($include_fields = FALSE, $single_entity
 /**
  * Get entity reference connections.
  */
-function entityrelationship_entitygraph_entityreference_connections() {
+function entityrelationships_entitygraph_entityreference_connections() {
   $field_relation = array();
 
   // Get all entityreference field names
@@ -165,8 +179,8 @@ function entityrelationship_entitygraph_entityreference_connections() {
   foreach ($rows as $row) {
     $field_name = $row->field_name;
     $field_info = (field_info_field($row->field_name));
-    foreach($field_info['bundles'] as $type => $bundles) {
-      foreach($bundles as $bundle) {
+    foreach ($field_info['bundles'] as $type => $bundles) {
+      foreach ($bundles as $bundle) {
         $target_bundles = !empty($field_info['settings']['handler_settings']['target_bundles']) ? $field_info['settings']['handler_settings']['target_bundles'] : array($field_info['settings']['target_type'] => $field_info['settings']['target_type']);
         foreach ($target_bundles as $target) {
           $instance_info = field_info_instance($type, $field_name, $bundle);
@@ -180,13 +194,32 @@ function entityrelationship_entitygraph_entityreference_connections() {
     }
   }
 
-  return  $field_relation;
+  return $field_relation;
+}
+
+/**
+ * Get property connections.
+ */
+function entityrelationships_entitygraph_property_connections() {
+  $property_relation = module_invoke_all('entityrelationships_entitygraph_property_connections');
+  return $property_relation;
+}
+
+/**
+ * Implements hook_entityrelationships_entitygraph_property_connections().
+ */
+function entityrelationships_entityrelationships_entitygraph_property_connections() {
+  $property_relation['profile2']['uid']['user'] = array(
+    'cardinality' => 1,
+    'required' => 1,
+  );
+  return $property_relation;
 }
 
 /**
  * Get entity name by table.
  */
-function entityrelationship_entitygraph_get_entity_by_table($table) {
+function entityrelationships_entitygraph_get_entity_by_table($table) {
   foreach (entity_get_info() as $entity_type => $entity_info) {
     if (!empty($entity_info['base table']) && $entity_info['base table'] == $table) {
       return $entity_type;
@@ -200,7 +233,7 @@ function entityrelationship_entitygraph_get_entity_by_table($table) {
  * @param $graph
  *  Graph array to update.
  */
-function entityrelationship_entitygraph_relationship(&$graph, $source, $target, $required, $cardinality) {
+function entityrelationships_entitygraph_relationship(&$graph, $source, $target, $required, $cardinality) {
   $edge_info = array(
     'arrowhead' => 'normal',
   );
@@ -212,18 +245,34 @@ function entityrelationship_entitygraph_relationship(&$graph, $source, $target, 
     $min_cardinality = $required ? 1 : 0;
     $max_cardinality = '*';
   }
-  $edge_info['taillabel'] = $min_cardinality . '..' . $max_cardinality;
 
-  $edge_info['headlabel'] = '1..*';
+  if ($cardinality >= 1 && $min_cardinality == $max_cardinality) {
+    $edge_info['taillabel'] = $min_cardinality;
+    $edge_info['headlabel'] = $min_cardinality;
+  }
+  else {
+    $edge_info['taillabel'] = $min_cardinality . '..' . $max_cardinality;
+    $edge_info['headlabel'] = '1..*';
+  }
 
   $graph['edges'][$source][$target] = $edge_info;
+}
+
+function entityrelationships_entitygraph_generate($graph, $render_engine = 'dot') {
+  switch ($render_engine) {
+    case 'plantuml':
+      return entityrelationships_entitygraph_generate_plantuml($graph);
+    case 'dot':
+    default:
+      return entityrelationships_entitygraph_generate_dot($graph);
+  }
 }
 
 /**
  * Render graph into digraph format.
  * using https://en.wikipedia.org/wiki/DOT_(graph_description_language)
  */
-function entityrelationship_entitygraph_generate($graph) {
+function entityrelationships_entitygraph_generate_dot($graph) {
   // Merge in defaults.
   $graph += array(
     'nodes' => array(),
@@ -237,10 +286,10 @@ function entityrelationship_entitygraph_generate($graph) {
 
   foreach ($graph['nodes'] as $name => $node_info) {
     if (!empty($node_info['group'])) {
-      $output .= entityrelationship_entitygraph_generate_subgraph($name, $node_info);
+      $output .= entityrelationships_entitygraph_generate_subgraph_dot($name, $node_info);
     }
     else {
-      $output .= entityrelationship_entitygraph_generate_node($name, $node_info);
+      $output .= entityrelationships_entitygraph_generate_node_dot($name, $node_info);
     }
   }
 
@@ -251,7 +300,7 @@ function entityrelationship_entitygraph_generate($graph) {
         $output .= ' "' . check_plain($k) . '" = "'. check_plain($v) . '"' . "\n";
       }
       $output .= "]\n";
-      $output .= $source_node . ' -> ' . $target_node . "\n";
+      $output .= '"' . $source_node . '" -> "' . $target_node . '"' . "\n";
     }
   }
 
@@ -260,18 +309,54 @@ function entityrelationship_entitygraph_generate($graph) {
 }
 
 /**
- * Create a subgraph
+ * Render graph into plantuml format.
  */
-function entityrelationship_entitygraph_generate_subgraph($name, $subgraph_info) {
+function entityrelationships_entitygraph_generate_plantuml($graph) {
+  $output = '';
+
+  // Merge in defaults.
+  $graph += array(
+    'nodes' => array(),
+    'edges' => array(),
+  );
+
+  $output .= "@startuml\n\n";
+  $output .= "hide methods\n\n";
+
+  foreach ($graph['nodes'] as $name => $node_info) {
+    if (!empty($node_info['group'])) {
+      $output .= entityrelationships_entitygraph_generate_subgraph_plantuml($name, $node_info);
+    }
+    else {
+      $output .= entityrelationships_entitygraph_generate_node_plantuml($name, $node_info);
+    }
+  }
+
+  foreach ($graph['edges'] as $source_node => $edges) {
+    foreach ($edges as $target_node => $edge_info) {
+      $tail_label = check_plain($edge_info['taillabel']);
+      $head_label = check_plain($edge_info['headlabel']);
+      $output .= "{$source_node} \"{$tail_label}\" - \"{$head_label}\" {$target_node}\n";
+    }
+  }
+
+  $output .= "\n@enduml\n";
+  return $output;
+}
+
+/**
+ * Create a subgraph (dot).
+ */
+function entityrelationships_entitygraph_generate_subgraph_dot($name, $subgraph_info) {
   $label = $subgraph_info['label'];
   unset($subgraph_info['label']);
   unset($subgraph_info['group']);
 
-  $output = "subgraph $name {\n";
+  $output = "subgraph \"$name\" {\n";
   $output .= 'label = "' . check_plain($label) . '"' . "\n";
 
   foreach ($subgraph_info as $node_name => $node_info) {
-    $output .= entityrelationship_entitygraph_generate_node($node_name, $node_info);
+    $output .= entityrelationships_entitygraph_generate_node_dot($node_name, $node_info);
   }
 
   $output .= "}\n";
@@ -279,9 +364,33 @@ function entityrelationship_entitygraph_generate_subgraph($name, $subgraph_info)
 }
 
 /**
- * Create a single node box.
+ * Create a subgraph (plantuml).
  */
-function entityrelationship_entitygraph_generate_node($name, $node_info) {
+function entityrelationships_entitygraph_generate_subgraph_plantuml($name, $subgraph_info) {
+  $label = $subgraph_info['label'];
+  unset($subgraph_info['label']);
+  unset($subgraph_info['group']);
+
+  $output = "package \"entity_type_{$name}\" <<Frame>> {\n";
+
+  $badge = _entityrelationships_entitygraph_entity_type_badge($name);
+  $output .= "\tclass \"{$name}\" {$badge}\n";
+
+  foreach ($subgraph_info as $node_name => $node_info) {
+    $output .= "\t" . entityrelationships_entitygraph_generate_node_plantuml($node_name, $node_info, $name);
+    if ($node_name != $name) {
+      $output .= "\t{$name} <|-- {$node_name}\n";
+    }
+  }
+
+  $output .= "}\n";
+  return $output;
+}
+
+/**
+ * Create a single node box (dot).
+ */
+function entityrelationships_entitygraph_generate_node_dot($name, $node_info) {
   // Merge in defaults.
   $node_info += array(
     'title' => $name,
@@ -290,7 +399,7 @@ function entityrelationship_entitygraph_generate_node($name, $node_info) {
     'methods' => array(),
   );
 
-  $label  = $node_info['title'] . '|';
+  $label = $node_info['title'] . '|';
 
   foreach ($node_info['properties'] as $property_name => $property_info) {
     $property_info += array(
@@ -309,4 +418,61 @@ function entityrelationship_entitygraph_generate_node($name, $node_info) {
   }
 
   return $name . ' [ label = "{' . check_plain($label) . '}" ]';
+}
+
+/**
+ * Create a single node box (plantuml).
+ */
+function entityrelationships_entitygraph_generate_node_plantuml($name, $node_info, $entity_type_name = '') {
+  // Merge in defaults.
+  $node_info += array(
+    'title' => $name,
+    'properties' => array(),
+    'fields' => array(),
+    'methods' => array(),
+  );
+
+  $badge = _entityrelationships_entitygraph_entity_type_badge($entity_type_name);
+  $output = "class \"{$name}\" {$badge}";
+  if (!empty($node_info['properties']) || !empty($node_info['fields'])) {
+    $output .= " {\n";
+
+    foreach ($node_info['properties'] as $property_name => $property_info) {
+      $property_info += array(
+        'type' => '',
+      );
+      $output .= "{$property_info['type']}: {$property_name}\n";
+    }
+
+    foreach ($node_info['fields'] as $field_name => $field_info) {
+      $field_info += array(
+        'type' => '',
+      );
+      $output .= "{$field_info['type']}: {$field_name}\n";
+    }
+    $output .= "}";
+  }
+  $output .= "\n";
+
+  return $output;
+}
+
+function _entityrelationships_entitygraph_entity_type_badge($entity_type) {
+  $name = strtoupper(substr($entity_type, 0, 1));
+  $color = _entityrelationships_entitygraph_color_swatch($entity_type);
+  return '<< (' . strtoupper(substr($name, 0, 1)) . ',' . $color . ') >>';
+}
+
+function _entityrelationships_entitygraph_color_swatch($entity_type) {
+  // Default swatches.
+  $swatches = array(
+    'node' => 'green',
+    'file' => 'orange',
+    'user' => 'red',
+  );
+
+  // Allow other modules to modify the swatches.
+  drupal_alter('entityrelationships_entitygraph_color_swatches', $swatches);
+
+  return isset($swatches[$entity_type]) ? $swatches[$entity_type] : 'gray';
 }
